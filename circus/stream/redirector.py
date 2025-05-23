@@ -46,10 +46,23 @@ class Redirector(object):
 
     def _start_one(self, fd, stream_name, process, pipe):
         if fd not in self._active:
+            # Defensive: Remove any existing handler first to prevent "fd added twice" error
+            try:
+                self.loop.remove_handler(fd)
+            except Exception:
+                # Handler wasn't in the loop, which is expected
+                pass
+            
             handler = self.Handler(self, stream_name, process, pipe)
-            self.loop.add_handler(fd, handler, ioloop.IOLoop.READ)
-            self._active[fd] = handler
-            return 1
+            try:
+                self.loop.add_handler(fd, handler, ioloop.IOLoop.READ)
+                self._active[fd] = handler
+                return 1
+            except ValueError as e:
+                # If we still get the error, ensure our state is consistent
+                if fd in self._active:
+                    del self._active[fd]
+                raise
         return 0
 
     def start(self):
@@ -61,11 +74,22 @@ class Redirector(object):
         return count
 
     def _stop_one(self, fd):
-        if fd in self._active:
+        removed = 0
+        
+        # Try to remove from IOLoop first
+        try:
             self.loop.remove_handler(fd)
+            removed = 1
+        except Exception:
+            # Handler wasn't in the loop
+            pass
+        
+        # Always clean up our internal state
+        if fd in self._active:
             del self._active[fd]
-            return 1
-        return 0
+            removed = 1
+            
+        return removed
 
     def stop(self):
         count = 0
